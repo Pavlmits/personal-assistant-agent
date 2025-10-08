@@ -41,6 +41,7 @@ python main.py chat
 ```bash
 # Start interactive chat
 python main.py chat
+python main.py chat --verbose  # Show reasoning steps
 
 # View available AI models
 python main.py models
@@ -60,8 +61,23 @@ python main.py profile
 # Enable/disable proactive features
 python main.py config --proactive true
 
+# Clean up database (fresh start)
+python main.py cleanup --all          # Clear everything (with confirmation)
+python main.py cleanup --goals        # Clear only goals
+python main.py cleanup --conversations # Clear only conversation history
+python main.py cleanup -c -g          # Clear conversations and goals
+
 # Background notification system (advanced)
 python main.py service install    # Install as system service
 python main.py proactive test     # Test notifications
 python main.py background-service # Run background service
+
+# Install once
+python main.py service install
+
+# Then control it with launchctl
+python main.py service start    # Start
+python main.py service stop     # Stop (but stays installed)
+python main.py service uninstall  # Remove completely
+python main.py service status
 ```

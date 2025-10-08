@@ -11,17 +11,15 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.progress import track
-from datetime import datetime
 
 # Add the project directory to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from agent.agent import ProactiveAgent
+from agent.langchain_agent import LangChainPersonalAgent
 from agent.memory import UserMemory
 from agent.clients.calendar_integration import CalendarManager
-from agent.privacy import PrivacyManager
 from agent.model_manager import ModelManager
-from agent.evaluation import AgentEvaluator
+from agent.notification_system import NotificationSystem
 
 console = Console()
 
@@ -33,7 +31,6 @@ def demo_header():
         "This demonstration showcases:\n"
         "• [green]Adaptive Learning[/green] - Agent learns user preferences\n"
         "• [yellow]Proactive Suggestions[/yellow] - Agent anticipates needs\n"
-        "• [cyan]Privacy Controls[/cyan] - Transparent data management\n"
         "• [magenta]Evaluation Framework[/magenta] - Performance measurement",
         title="🤖 Thesis Demo",
         border_style="blue"
@@ -62,7 +59,8 @@ def simulate_user_interactions(agent):
         console.print(f"[green]User:[/green] {user_message}")
         
         # Process the message
-        response = agent.process_message(user_message)
+        result = agent.process_message(user_message, save_to_memory=True)
+        response = result['response'] if isinstance(result, dict) else result
         console.print(f"[blue]Agent:[/blue] {response}")
         
         time.sleep(0.5)  # Brief pause for demonstration
@@ -118,90 +116,6 @@ def demonstrate_proactivity(agent):
             for i, suggestion in enumerate(suggestions, 1):
                 console.print(f"  {i}. {suggestion}")
 
-def demonstrate_privacy_controls(privacy_manager):
-    """Demonstrate privacy management features"""
-    console.print("\n[bold cyan]🔒 Privacy Controls Demonstration[/bold cyan]")
-    
-    # Show privacy report
-    privacy_report = privacy_manager.generate_privacy_report()
-    
-    console.print(Panel(
-        f"[bold]Privacy Level:[/bold] {privacy_report['privacy_level']}\n"
-        f"[bold]Data Collection:[/bold] {privacy_report['data_collection']}\n"
-        f"[bold]Data Usage:[/bold] {privacy_report['data_usage']}\n"
-        f"[bold]Retention:[/bold] {privacy_report['data_retention']}\n"
-        f"[bold]Storage:[/bold] {privacy_report['storage_location']}",
-        title="Privacy Overview"
-    ))
-    
-    # Show data categories
-    categories = privacy_report.get('data_categories', [])
-    if categories:
-        table = Table(title="Data Categories")
-        table.add_column("Category", style="cyan")
-        table.add_column("Purpose", style="yellow")
-        table.add_column("Retention", style="green")
-        
-        for category in categories[:3]:  # Show first 3
-            table.add_row(
-                category['category'],
-                category['purpose'],
-                category['retention']
-            )
-        
-        console.print(table)
-
-def demonstrate_evaluation(evaluator):
-    """Demonstrate evaluation framework"""
-    console.print("\n[bold red]📊 Evaluation Framework Demonstration[/bold red]")
-    
-    console.print("[dim]Running comprehensive evaluation...[/dim]")
-    
-    # Run evaluation
-    metrics = evaluator.run_comprehensive_evaluation()
-    
-    # Display results
-    table = Table(title="Agent Performance Metrics")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Score", style="green")
-    table.add_column("Description", style="dim")
-    
-    table.add_row(
-        "Adaptation", 
-        f"{metrics.adaptation_score:.3f}",
-        "How well agent learns preferences"
-    )
-    table.add_row(
-        "Proactivity", 
-        f"{metrics.proactivity_score:.3f}",
-        "Quality of proactive suggestions"
-    )
-    table.add_row(
-        "User Satisfaction", 
-        f"{metrics.user_satisfaction:.3f}",
-        "Estimated user satisfaction"
-    )
-    table.add_row(
-        "Privacy Compliance", 
-        f"{metrics.privacy_compliance:.3f}",
-        "Privacy controls effectiveness"
-    )
-    table.add_row(
-        "[bold]Overall Score[/bold]", 
-        f"[bold]{metrics.overall_score:.3f}[/bold]",
-        "[bold]Weighted average performance[/bold]"
-    )
-    
-    console.print(table)
-    
-    # Generate evaluation report
-    report = evaluator.generate_evaluation_report()
-    
-    if report['recommendations']:
-        console.print("\n[yellow]Recommendations for Improvement:[/yellow]")
-        for rec in report['recommendations']:
-            console.print(f"  • {rec}")
-
 def demonstrate_research_applications():
     """Demonstrate research applications and thesis relevance"""
     console.print("\n[bold green]🎓 Research Applications & Thesis Relevance[/bold green]")
@@ -223,9 +137,9 @@ def demonstrate_research_applications():
             "thesis_relevance": "Illustrates multi-source data integration for enhanced interaction"
         },
         {
-            "area": "Privacy Framework",
-            "description": "Transparent data usage with user control and compliance",
-            "thesis_relevance": "Addresses ethical considerations in personal AI systems"
+            "area": "Personalization Engine",
+            "description": "Learns user preferences and adapts responses over time",
+            "thesis_relevance": "Demonstrates adaptive learning in personal AI systems"
         }
     ]
     
@@ -245,7 +159,6 @@ def main():
     # Initialize components
     memory = UserMemory()
     calendar_mgr = CalendarManager()
-    privacy_mgr = PrivacyManager()
     model_mgr = ModelManager()
     
     # Setup default model
@@ -256,15 +169,13 @@ def main():
         console.print("[yellow]⚠ No AI models available - using fallback responses[/yellow]")
     
     # Create agent
-    agent = ProactiveAgent(
+    notification_system = NotificationSystem()
+    agent = LangChainPersonalAgent(
         memory=memory,
         calendar_manager=calendar_mgr,
-        privacy_manager=privacy_mgr,
-        model_manager=model_mgr
+        model_manager=model_mgr,
+        notification_system=notification_system
     )
-    
-    # Create evaluator
-    evaluator = AgentEvaluator(memory, privacy_mgr)
     
     console.print("[green]✓ Agent initialized successfully[/green]")
     
@@ -272,8 +183,6 @@ def main():
     simulate_user_interactions(agent)
     demonstrate_adaptation(agent)
     demonstrate_proactivity(agent)
-    demonstrate_privacy_controls(privacy_mgr)
-    demonstrate_evaluation(evaluator)
     demonstrate_research_applications()
     
     # Final summary
@@ -282,7 +191,6 @@ def main():
         "This demonstration showed how a personal AI agent can:\n"
         "• Learn and adapt to user preferences over time\n"
         "• Provide proactive suggestions based on context\n"
-        "• Maintain privacy and transparency\n"
         "• Be evaluated for effectiveness\n\n"
         "[dim]To interact with the agent directly, run:[/dim]\n"
         "[cyan]python main.py chat[/cyan]",

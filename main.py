@@ -13,13 +13,13 @@ import sys
 import time
 from typing import Optional
 
-from agent.agent import ProactiveAgent
+from agent.langchain_agent import LangChainPersonalAgent
 from agent.memory import UserMemory
 from agent.clients.calendar_integration import CalendarManager
-from agent.privacy import PrivacyManager
 from agent.model_manager import ModelManager
 from agent.proactive_manager import ProactiveManager, ProactiveConfig
 from agent.system_service import SystemServiceManager
+from agent.notification_system import NotificationSystem
 
 app = typer.Typer(help="Personal and Proactive AI Agent for Thesis Research")
 console = Console()
@@ -28,30 +28,36 @@ console = Console()
 agent = None
 
 def initialize_agent():
-    """Initialize the agent with all components"""
+    """Initialize the LangChain agent with all components"""
     global agent
     if agent is None:
-        console.print("[blue]Initializing Personal AI Agent...[/blue]")
-        
-        # Initialize components
-        memory = UserMemory()
-        calendar_mgr = CalendarManager()
-        privacy_mgr = PrivacyManager()
-        model_mgr = ModelManager()
-        
-        # Setup default model if none selected
-        current_model = model_mgr.setup_default_model()
-        if current_model:
-            console.print(f"[green]✓ Using model: {model_mgr.get_current_model().name}[/green]")
-        else:
-            console.print("[yellow]⚠ No AI models available - using fallback responses[/yellow]")
-        
-        # Create agent
-        agent = ProactiveAgent(
+        return initialize_langchain_agent()
+    return agent
+
+def initialize_langchain_agent():
+    """Initialize the LangChain agent with all components"""
+    console.print("[blue]Initializing Personal AI Agent...[/blue]")
+    
+    # Initialize components
+    memory = UserMemory()
+    calendar_mgr = CalendarManager()
+    model_mgr = ModelManager()
+    notification_system = NotificationSystem()
+    
+    # Setup default model if none selected
+    current_model = model_mgr.setup_default_model()
+    if current_model:
+        console.print(f"[green]✓ Using model: {model_mgr.get_current_model().name}[/green]")
+    else:
+        console.print("[yellow]⚠ No AI models available - agent may not work properly[/yellow]")
+    
+    try:
+        # Create LangChain agent
+        agent = LangChainPersonalAgent(
             memory=memory,
             calendar_manager=calendar_mgr,
-            privacy_manager=privacy_mgr,
-            model_manager=model_mgr
+            model_manager=model_mgr,
+            notification_system=notification_system
         )
         
         # Initialize proactive manager for background notifications
@@ -59,47 +65,68 @@ def initialize_agent():
             enabled=True,
             check_interval=900,  # 15 minutes
             max_notifications_per_hour=6,
-            learning_enabled=privacy_mgr.can_learn_preferences(),
+            learning_enabled=True,
             calendar_integration=calendar_mgr.is_available(),
             goal_tracking=True,
-            pattern_analysis=privacy_mgr.can_learn_preferences()
+            pattern_analysis=True
         )
         
         agent.proactive_manager = ProactiveManager(
             memory=memory,
             calendar_manager=calendar_mgr,
-            privacy_manager=privacy_mgr,
-            config=proactive_config
+            config=proactive_config,
+            agent=agent
         )
         
         console.print("[green]✓ Agent initialized successfully[/green]")
-    return agent
+        return agent
+        
+    except Exception as e:
+        console.print(f"[red]✗ Failed to initialize agent: {e}[/red]")
+        raise
+
+def show_agent_status(agent):
+    """Show agent status information"""
+    status = agent.get_agent_status()
+    
+    table = Table(title="🤖 Agent Status")
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="green")
+    
+    table.add_row("Agent Type", status['agent_type'])
+    table.add_row("Model", f"{status['model']['name']} ({status['model']['provider']})")
+    table.add_row("Local Model", "✅ Yes" if status['model']['local'] else "❌ No")
+    table.add_row("Tools Available", str(status['tools_available']))
+    table.add_row("Memory Enabled", "✅ Yes" if status['memory_enabled'] else "❌ No")
+    table.add_row("Proactive Enabled", "✅ Yes" if status['proactive_enabled'] else "❌ No")
+    table.add_row("Total Interactions", str(status['total_interactions']))
+    
+    console.print(table)
+    
+    # Show available tools
+    console.print(f"\n[cyan]Available Tools:[/cyan]")
+    for tool_name in status['tool_names']:
+        console.print(f"  • {tool_name}")
 
 @app.command()
 def chat(
-    proactive: bool = typer.Option(True, help="Enable proactive suggestions"),
-    save_session: bool = typer.Option(True, help="Save conversation to memory")
+    save_session: bool = typer.Option(True, help="Save conversation to memory"),
+    verbose: bool = typer.Option(False, help="Show agent reasoning steps")
 ):
     """Start an interactive chat session with the AI agent"""
     agent = initialize_agent()
     
     # Show current model info
-    current_model = agent.model_manager.get_current_model()
+    status = agent.get_agent_status()
     console.print(Panel(
         f"[bold blue]Personal AI Agent[/bold blue]\n"
-        f"[dim]Model: {current_model.name} ({current_model.provider.value})[/dim]\n\n"
-        "I'm your proactive assistant. I learn from our interactions and can help anticipate your needs.\n"
+        f"[dim]Model: {status['model']['name']} ({status['model']['provider']})[/dim]\n"
+        f"[dim]Tools Available: {status['tools_available']} ({', '.join(status['tool_names'][:3])}...)[/dim]\n\n"
+        "I'm your AI agent with reasoning capabilities and access to tools.\n"
+        "I can search your calendar, manage goals, access memory, and take actions.\n"
         "[dim]Type 'quit' to exit, 'help' for commands[/dim]",
         title="🤖 Agent Ready"
     ))
-    
-    # Check for proactive suggestions at startup
-    if proactive:
-        suggestions = agent.get_proactive_suggestions()
-        if suggestions:
-            console.print("\n[yellow]💡 Proactive Suggestions:[/yellow]")
-            for suggestion in suggestions:
-                console.print(f"  • {suggestion}")
     
     while True:
         try:
@@ -111,27 +138,30 @@ def chat(
             elif user_input.lower() == 'help':
                 show_help()
                 continue
-            elif user_input.lower() == 'models':
-                show_models_info(agent.model_manager)
+            elif user_input.lower() == 'status':
+                show_agent_status(agent)
                 continue
             
-            # Process user input
-            response = agent.process_message(user_input, save_to_memory=save_session)
+            # Process user input with LangChain agent
+            with console.status("[bold blue]Agent thinking...", spinner="dots"):
+                result = agent.process_message(user_input, save_to_memory=save_session)
             
-            console.print(f"\n[bold blue]Agent[/bold blue]: {response}")
-            
-            # Show proactive suggestions periodically
-            if proactive and len(agent.memory.get_recent_messages(5)) % 3 == 0:
-                suggestions = agent.get_proactive_suggestions()
-                if suggestions:
-                    console.print("\n[dim yellow]💭 Thinking ahead:[/dim yellow]")
-                    for suggestion in suggestions[:2]:  # Limit to 2 suggestions
-                        console.print(f"  [dim]• {suggestion}[/dim]")
+            if result['success']:
+                console.print(f"\n[bold blue]Agent[/bold blue]: {result['response']}")
+                
+                # Show intermediate steps if verbose
+                if verbose and result['intermediate_steps']:
+                    console.print("\n[dim cyan]🔧 Tools Used:[/dim cyan]")
+                    for i, (action, observation) in enumerate(result['intermediate_steps'], 1):
+                        console.print(f"[dim]  {i}. {action.tool}: {action.tool_input}[/dim]")
+            else:
+                console.print(f"\n[red]Error: {result['response']}[/red]")
                         
         except KeyboardInterrupt:
             console.print("\n[blue]Session paused. Type 'quit' to exit properly.[/blue]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
+
 
 @app.command()
 def models():
@@ -364,7 +394,7 @@ def proactive(action: str = typer.Argument("status", help="Action: status, enabl
             f"[bold]Notifications Sent:[/bold] {status['metrics']['notifications_sent']}\n"
             f"[bold]User Interactions:[/bold] {status['metrics']['user_interactions']}\n"
             f"[bold]Active Notifications:[/bold] {status['active_notifications']}\n"
-            f"[bold]Cache Hit Rate:[/bold] {status['ai_service_stats']['cache_hit_rate']:.1%}",
+            f"[bold]Trigger Rules:[/bold] {status['trigger_rules_count']}",
             title="🔮 Proactive System Status"
         ))
         
@@ -440,8 +470,23 @@ def profile():
     
     table.add_row("Communication Style", profile_data.get('communication_style', 'Learning...'))
     table.add_row("Preferred Topics", ', '.join(profile_data.get('interests', ['Discovering...'])))
-    table.add_row("Active Hours", profile_data.get('active_hours', 'Observing patterns...'))
-    table.add_row("Goal Focus", profile_data.get('primary_goals', 'Setting up...'))
+    
+    # Format active hours dict as string
+    active_hours = profile_data.get('active_hours', {})
+    if isinstance(active_hours, dict) and active_hours:
+        # Sort by hour and format nicely
+        hours_str = ', '.join([f"{h}:00 ({count}x)" for h, count in sorted(active_hours.items(), key=lambda x: int(x[0]))])
+        table.add_row("Active Hours", hours_str)
+    else:
+        table.add_row("Active Hours", 'Observing patterns...')
+    
+    # Format primary goals
+    primary_goals = profile_data.get('primary_goals', [])
+    if isinstance(primary_goals, list) and primary_goals:
+        table.add_row("Goal Focus", ', '.join(primary_goals))
+    else:
+        table.add_row("Goal Focus", 'Setting up...')
+    
     table.add_row("Interaction Frequency", profile_data.get('interaction_preference', 'Adaptive'))
     
     console.print(table)
@@ -509,19 +554,14 @@ def goals(action: str = typer.Argument("list", help="Action: list, add, update, 
 
 @app.command()
 def config(
-    proactive: Optional[bool] = typer.Option(None, help="Enable/disable proactive features"),
-    privacy_level: Optional[str] = typer.Option(None, help="Privacy level: minimal, balanced, strict")
+    proactive: Optional[bool] = typer.Option(None, help="Enable/disable proactive features")
 ):
-    """Configure agent behavior and privacy settings"""
+    """Configure agent behavior settings"""
     agent = initialize_agent()
     
     if proactive is not None:
         agent.config['proactive_enabled'] = proactive
         console.print(f"[green]Proactive features {'enabled' if proactive else 'disabled'}[/green]")
-    
-    if privacy_level:
-        agent.privacy_manager.set_privacy_level(privacy_level)
-        console.print(f"[green]Privacy level set to: {privacy_level}[/green]")
     
     # Show current config
     console.print("\n[cyan]Current Configuration:[/cyan]")
@@ -529,43 +569,84 @@ def config(
         console.print(f"  {key}: {value}")
 
 @app.command()
-def privacy():
-    """View and manage privacy settings and data usage"""
-    agent = initialize_agent()
+def cleanup(
+    conversations: bool = typer.Option(False, "--conversations", "-c", help="Clear conversation history"),
+    goals: bool = typer.Option(False, "--goals", "-g", help="Clear all goals"),
+    profile: bool = typer.Option(False, "--profile", "-p", help="Clear user profile"),
+    insights: bool = typer.Option(False, "--insights", "-i", help="Clear learning insights"),
+    patterns: bool = typer.Option(False, "--patterns", help="Clear interaction patterns"),
+    all: bool = typer.Option(False, "--all", "-a", help="Clear everything (requires confirmation)")
+):
+    """Clean up user data and reset the database"""
     
-    privacy_report = agent.privacy_manager.generate_privacy_report()
+    # Initialize memory
+    memory = UserMemory()
     
-    console.print(Panel(
-        f"[bold]Data Collection:[/bold] {privacy_report['data_collection']}\n"
-        f"[bold]Storage Location:[/bold] {privacy_report['storage_location']}\n"
-        f"[bold]Sharing:[/bold] {privacy_report['sharing_policy']}\n"
-        f"[bold]Retention:[/bold] {privacy_report['retention_policy']}",
-        title="🔒 Privacy Overview"
-    ))
+    # If no options specified, show help
+    if not any([conversations, goals, profile, insights, patterns, all]):
+        console.print("[yellow]Please specify what to clean up:[/yellow]")
+        console.print("  --all, -a           Clear everything")
+        console.print("  --conversations, -c Clear conversation history")
+        console.print("  --goals, -g         Clear all goals")
+        console.print("  --profile, -p       Clear user profile")
+        console.print("  --insights, -i      Clear learning insights")
+        console.print("  --patterns          Clear interaction patterns")
+        console.print("\n[cyan]Example:[/cyan] python main.py cleanup --all")
+        return
     
-    if Confirm.ask("Would you like to export your data?"):
-        export_path = agent.privacy_manager.export_user_data()
-        console.print(f"[green]Data exported to: {export_path}[/green]")
-    
-    if Confirm.ask("Would you like to delete some data?"):
-        console.print("[yellow]Data deletion options:[/yellow]")
-        console.print("1. Recent conversations (last 7 days)")
-        console.print("2. All conversation history")
-        console.print("3. Learned preferences")
-        console.print("4. Everything")
+    # Confirm if clearing everything
+    if all:
+        console.print("[red]⚠️  WARNING: This will delete ALL data including:[/red]")
+        console.print("  • Conversation history")
+        console.print("  • Goals and progress")
+        console.print("  • User profile and preferences")
+        console.print("  • Learning insights")
+        console.print("  • Interaction patterns")
         
-        choice = Prompt.ask("Select option", choices=["1", "2", "3", "4"])
-        agent.privacy_manager.delete_data(choice)
-        console.print("[green]Data deleted as requested[/green]")
+        if not Confirm.ask("\n[bold red]Are you sure you want to continue?[/bold red]", default=False):
+            console.print("[yellow]Cleanup cancelled.[/yellow]")
+            return
+        
+        memory.clear_data('all')
+        console.print("[green]✓ All data cleared successfully![/green]")
+        return
+    
+    # Clear specific data types
+    cleared = []
+    
+    if conversations:
+        memory.clear_data('conversations')
+        cleared.append("conversation history")
+    
+    if goals:
+        memory.clear_data('goals')
+        cleared.append("goals")
+    
+    if profile:
+        memory.clear_data('profile')
+        cleared.append("user profile")
+    
+    if insights:
+        memory.clear_data('insights')
+        cleared.append("learning insights")
+    
+    if patterns:
+        memory.clear_data('patterns')
+        cleared.append("interaction patterns")
+    
+    if cleared:
+        console.print(f"[green]✓ Cleared: {', '.join(cleared)}[/green]")
+    else:
+        console.print("[yellow]Nothing to clear.[/yellow]")
 
 def show_help():
     """Show available commands during chat"""
     console.print("\n[cyan]Available Commands:[/cyan]")
     console.print("  help - Show this help")
+    console.print("  status - Show agent status and capabilities")
     console.print("  quit/exit/bye - End conversation")
     console.print("  profile - View learned preferences")
     console.print("  goals - Quick goal check")
-    console.print("  privacy - Privacy controls")
     console.print("  models - View AI models")
 
 if __name__ == "__main__":

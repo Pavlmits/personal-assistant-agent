@@ -49,7 +49,7 @@ class CacheDatabase:
         thread_id = threading.get_ident()
         
         if thread_id not in self.connection_pool:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
             conn.row_factory = sqlite3.Row  # Enable dict-like access
             # Optimize for read performance
             conn.execute("PRAGMA journal_mode=WAL")
@@ -88,22 +88,6 @@ class CacheDatabase:
                 priority INTEGER DEFAULT 1,
                 status TEXT DEFAULT 'active',
                 days_since_update INTEGER
-            )
-        ''')
-        
-        # Calendar cache - time-based queries
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS calendar_cache (
-                event_id TEXT PRIMARY KEY,
-                summary TEXT NOT NULL,
-                start_time TEXT NOT NULL,
-                end_time TEXT,
-                location TEXT,
-                description TEXT,
-                attendee_count INTEGER DEFAULT 0,
-                is_all_day BOOLEAN DEFAULT FALSE,
-                minutes_until INTEGER,
-                cached_at TEXT NOT NULL
             )
         ''')
         
@@ -151,7 +135,6 @@ class CacheDatabase:
         # Performance indexes
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_deadline ON goals_cache(target_date, status)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_stale ON goals_cache(days_since_update, status)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_calendar_upcoming ON calendar_cache(minutes_until)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_notifications_recent ON notification_history(sent_at DESC)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_triggers_enabled ON trigger_rules(enabled, rule_type)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_context_expires ON context_snapshots(expires_at)')
@@ -308,53 +291,6 @@ class CacheDatabase:
             AND target_date <= ? AND progress < 100
             ORDER BY days_until_deadline ASC
         ''', (future_date,))
-        
-        return [dict(row) for row in cursor.fetchall()]
-    
-    # Calendar Cache Methods
-    def sync_calendar_cache(self, events: List[Dict]):
-        """Sync calendar events to cache"""
-        with self.lock:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            # Remove old events (older than 1 day)
-            yesterday = (datetime.now() - timedelta(days=1)).isoformat()
-            cursor.execute('DELETE FROM calendar_cache WHERE start_time < ?', (yesterday,))
-            
-            # Insert/update events
-            for event in events:
-                cursor.execute('''
-                    INSERT OR REPLACE INTO calendar_cache 
-                    (event_id, summary, start_time, end_time, location, description, 
-                     attendee_count, is_all_day, cached_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    event['id'],
-                    event['summary'],
-                    event['start'],
-                    event.get('end'),
-                    event.get('location', ''),
-                    event.get('description', ''),
-                    event.get('attendees', 0),
-                    event.get('is_all_day', False),
-                    datetime.now().isoformat()
-                ))
-            
-            conn.commit()
-    
-    def get_upcoming_events(self, minutes_ahead: Tuple[int, int] = (30, 120)) -> List[Dict]:
-        """Get events in specified time window"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT event_id, summary, start_time, end_time, location, description,
-                   attendee_count, minutes_until
-            FROM calendar_cache 
-            WHERE minutes_until BETWEEN ? AND ?
-            ORDER BY minutes_until ASC
-        ''', (minutes_ahead[0], minutes_ahead[1]))
         
         return [dict(row) for row in cursor.fetchall()]
     
@@ -554,9 +490,6 @@ class CacheDatabase:
             old_date = (datetime.now() - timedelta(days=30)).isoformat()
             cursor.execute('DELETE FROM notification_history WHERE sent_at < ?', (old_date,))
             
-            # Remove old calendar events
-            cursor.execute('DELETE FROM calendar_cache WHERE start_time < ?', (old_date,))
-            
             conn.commit()
     
     def get_cache_stats(self) -> Dict[str, Any]:
@@ -567,7 +500,7 @@ class CacheDatabase:
         stats = {}
         
         # Table sizes
-        tables = ['user_patterns', 'goals_cache', 'calendar_cache', 'trigger_rules', 
+        tables = ['user_patterns', 'goals_cache', 'trigger_rules', 
                  'notification_history', 'context_snapshots']
         
         for table in tables:

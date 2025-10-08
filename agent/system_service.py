@@ -40,10 +40,6 @@ class SystemServiceManager:
         """Detect the current platform"""
         if sys.platform == "darwin":
             return "macos"
-        elif sys.platform.startswith("win"):
-            return "windows"
-        elif sys.platform.startswith("linux"):
-            return "linux"
         else:
             return "unknown"
     
@@ -64,10 +60,6 @@ class SystemServiceManager:
             
             if self.platform == "macos":
                 return self._install_macos_service(auto_start)
-            elif self.platform == "linux":
-                return self._install_linux_service(auto_start)
-            elif self.platform == "windows":
-                return self._install_windows_service(auto_start)
             else:
                 self.logger.error(f"Unsupported platform: {self.platform}")
                 return False
@@ -144,89 +136,6 @@ class SystemServiceManager:
             self.logger.error(f"Error installing macOS service: {e}")
             return False
     
-    def _install_linux_service(self, auto_start: bool) -> bool:
-        """Install Linux systemd service"""
-        try:
-            # Create systemd user service directory
-            systemd_dir = Path.home() / ".config" / "systemd" / "user"
-            systemd_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Service file
-            service_file = systemd_dir / f"{self.service_name}.service"
-            
-            # Get current Python executable and script path
-            python_exe = sys.executable
-            script_path = Path(__file__).parent.parent / "main.py"
-            
-            # Create service content
-            service_content = f"""[Unit]
-Description=Proactive AI Agent Background Service
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={python_exe} {script_path} background-service --daemon
-Restart=always
-RestartSec=10
-User={os.getenv('USER')}
-WorkingDirectory={Path(__file__).parent.parent}
-StandardOutput=append:{self.log_file}
-StandardError=append:{self.log_file}
-
-[Install]
-WantedBy=default.target
-"""
-            
-            # Write service file
-            with open(service_file, 'w') as f:
-                f.write(service_content)
-            
-            # Reload systemd and enable service
-            subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
-            
-            if auto_start:
-                subprocess.run(['systemctl', '--user', 'enable', f"{self.service_name}.service"], check=True)
-                subprocess.run(['systemctl', '--user', 'start', f"{self.service_name}.service"], check=True)
-            
-            self.logger.info(f"Linux systemd service installed: {service_file}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error installing Linux service: {e}")
-            return False
-    
-    def _install_windows_service(self, auto_start: bool) -> bool:
-        """Install Windows service"""
-        try:
-            # For Windows, we'll create a startup entry instead of a full service
-            # This is simpler and doesn't require admin privileges
-            
-            startup_dir = Path(os.getenv('APPDATA')) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-            startup_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Create batch file for startup
-            batch_file = startup_dir / f"{self.service_name}.bat"
-            
-            python_exe = sys.executable
-            script_path = Path(__file__).parent.parent / "main.py"
-            
-            batch_content = f"""@echo off
-cd /d "{Path(__file__).parent.parent}"
-"{python_exe}" "{script_path}" background-service --daemon
-"""
-            
-            if auto_start:
-                with open(batch_file, 'w') as f:
-                    f.write(batch_content)
-                
-                self.logger.info(f"Windows startup entry created: {batch_file}")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error installing Windows service: {e}")
-            return False
-    
     def uninstall_service(self) -> bool:
         """Uninstall the system service"""
         try:
@@ -237,10 +146,6 @@ cd /d "{Path(__file__).parent.parent}"
             
             if self.platform == "macos":
                 return self._uninstall_macos_service()
-            elif self.platform == "linux":
-                return self._uninstall_linux_service()
-            elif self.platform == "windows":
-                return self._uninstall_windows_service()
             else:
                 return False
                 
@@ -268,46 +173,6 @@ cd /d "{Path(__file__).parent.parent}"
             self.logger.error(f"Error uninstalling macOS service: {e}")
             return False
     
-    def _uninstall_linux_service(self) -> bool:
-        """Uninstall Linux systemd service"""
-        try:
-            service_file = Path.home() / ".config" / "systemd" / "user" / f"{self.service_name}.service"
-            
-            if service_file.exists():
-                # Stop and disable service
-                subprocess.run(['systemctl', '--user', 'stop', f"{self.service_name}.service"], capture_output=True)
-                subprocess.run(['systemctl', '--user', 'disable', f"{self.service_name}.service"], capture_output=True)
-                
-                # Remove service file
-                service_file.unlink()
-                
-                # Reload systemd
-                subprocess.run(['systemctl', '--user', 'daemon-reload'], capture_output=True)
-                
-                self.logger.info("Linux systemd service uninstalled")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error uninstalling Linux service: {e}")
-            return False
-    
-    def _uninstall_windows_service(self) -> bool:
-        """Uninstall Windows startup entry"""
-        try:
-            startup_dir = Path(os.getenv('APPDATA')) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-            batch_file = startup_dir / f"{self.service_name}.bat"
-            
-            if batch_file.exists():
-                batch_file.unlink()
-                self.logger.info("Windows startup entry removed")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error uninstalling Windows service: {e}")
-            return False
-    
     def start_service(self) -> bool:
         """Start the system service"""
         try:
@@ -318,17 +183,6 @@ cd /d "{Path(__file__).parent.parent}"
                 )
                 return result.returncode == 0
                 
-            elif self.platform == "linux":
-                result = subprocess.run(
-                    ['systemctl', '--user', 'start', f"{self.service_name}.service"],
-                    capture_output=True, text=True
-                )
-                return result.returncode == 0
-                
-            elif self.platform == "windows":
-                # For Windows, we'll start the process directly
-                return self._start_windows_process()
-            
             return False
             
         except Exception as e:
@@ -364,67 +218,11 @@ cd /d "{Path(__file__).parent.parent}"
                     capture_output=True, text=True
                 )
                 return result.returncode == 0
-                
-            elif self.platform == "linux":
-                result = subprocess.run(
-                    ['systemctl', '--user', 'stop', f"{self.service_name}.service"],
-                    capture_output=True, text=True
-                )
-                return result.returncode == 0
-                
-            elif self.platform == "windows":
-                # Kill any running processes
-                return self._stop_windows_process()
             
             return False
             
         except Exception as e:
             self.logger.error(f"Error stopping service: {e}")
-            return False
-    
-    def _start_windows_process(self) -> bool:
-        """Start Windows background process"""
-        try:
-            python_exe = sys.executable
-            script_path = Path(__file__).parent.parent / "main.py"
-            
-            # Start process in background
-            process = subprocess.Popen(
-                [python_exe, str(script_path), "background-service", "--daemon"],
-                cwd=Path(__file__).parent.parent,
-                stdout=open(self.log_file, 'a'),
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform.startswith('win') else 0
-            )
-            
-            # Write PID file
-            with open(self.pid_file, 'w') as f:
-                f.write(str(process.pid))
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error starting Windows process: {e}")
-            return False
-    
-    def _stop_windows_process(self) -> bool:
-        """Stop Windows background process"""
-        try:
-            # Find and kill processes
-            for process in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    cmdline = process.info['cmdline']
-                    if cmdline and 'background-service' in ' '.join(cmdline):
-                        process.terminate()
-                        process.wait(timeout=10)
-                        self.logger.info(f"Stopped process: {process.info['pid']}")
-                except Exception:
-                    continue
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error stopping Windows process: {e}")
             return False
     
     def get_service_status(self) -> Dict[str, Any]:
@@ -444,14 +242,7 @@ cd /d "{Path(__file__).parent.parent}"
                 plist_file = Path.home() / "Library" / "LaunchAgents" / f"com.proactive-agent.{self.service_name}.plist"
                 status['installed'] = plist_file.exists()
                 
-            elif self.platform == "linux":
-                service_file = Path.home() / ".config" / "systemd" / "user" / f"{self.service_name}.service"
-                status['installed'] = service_file.exists()
                 
-            elif self.platform == "windows":
-                startup_dir = Path(os.getenv('APPDATA')) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-                batch_file = startup_dir / f"{self.service_name}.bat"
-                status['installed'] = batch_file.exists()
             
             # Check if service is running
             if self.pid_file.exists():

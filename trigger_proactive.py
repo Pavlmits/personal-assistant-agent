@@ -15,7 +15,6 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from agent.memory import UserMemory
 from agent.cache_database import CacheDatabase
 from agent.notification_system import NotificationSystem
-from agent.ai_service_client import AIServiceClient
 from rich.console import Console
 from rich.panel import Panel
 
@@ -67,7 +66,6 @@ def force_proactive_check():
         # Initialize components (separate from background service)
         cache_db = CacheDatabase("test_cache.db")  # Use separate DB to avoid lock
         notification_system = NotificationSystem()
-        ai_service = AIServiceClient(cache_db)
         
         # Setup test data
         memory = setup_test_data()
@@ -96,15 +94,8 @@ def force_proactive_check():
         for goal in stale_goals[:2]:  # Limit to 2 notifications
             console.print(f"[cyan]Generating notification for: {goal['title']}[/cyan]")
             
-            content = ai_service.generate_notification_content(
-                trigger_type="goal",
-                context={
-                    "goal": goal,
-                    "days_stale": goal['days_since_update']
-                },
-                user_preference="medium",
-                priority="normal"
-            )
+            # Use template-based notification for testing
+            content = f"Your goal '{goal['title']}' hasn't been updated in {goal['days_since_update']} days. How's it going?"
             
             if content:
                 notification_id = notification_system.send_notification(
@@ -128,15 +119,10 @@ def force_proactive_check():
             console.print("[cyan]Current time matches active pattern - generating suggestion[/cyan]")
             
             interests = cache_db.get_user_pattern('interests')
-            content = ai_service.generate_notification_content(
-                trigger_type="pattern",
-                context={
-                    "activity_level": pattern['data'][current_hour],
-                    "interests": interests['data'] if interests else []
-                },
-                user_preference="medium",
-                priority="low"
-            )
+            # Use template-based notification for testing
+            interest_list = interests['data'] if interests and isinstance(interests.get('data'), list) else []
+            interest_text = interest_list[0] if interest_list else "your interests"
+            content = f"You're typically active at this time. Based on your interest in {interest_text}, you might want to work on something related."
             
             if content:
                 notification_id = notification_system.send_notification(
@@ -160,7 +146,6 @@ def force_proactive_check():
             console.print("\n[yellow]No notifications triggered. This is normal if conditions aren't met.[/yellow]")
         
         # Cleanup
-        ai_service.cleanup()
         notification_system.cleanup()
         cache_db.close()
         

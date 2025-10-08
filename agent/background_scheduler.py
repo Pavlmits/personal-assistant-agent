@@ -6,20 +6,19 @@ Minimal resource footprint, always-running process for proactive notifications
 import time
 import threading
 import signal
-import sys
 import os
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, Optional, Any
 from dataclasses import dataclass
 import psutil
 import queue
 from pathlib import Path
 
+from .clients.calendar_integration import CalendarManager
 from .cache_database import CacheDatabase, TriggerRule
 from .notification_system import NotificationSystem
-from .ai_service_client import AIServiceClient
 
 @dataclass
 class SchedulerConfig:
@@ -37,11 +36,12 @@ class BackgroundScheduler:
     Designed for minimal resource usage and high reliability
     """
     
-    def __init__(self, config: Optional[SchedulerConfig] = None):
+    def __init__(self, config: Optional[SchedulerConfig] = None, agent=None, calendar_manager=None, cache_db=None):
         self.config = config or SchedulerConfig()
-        self.cache_db = CacheDatabase()
+        self.cache_db = cache_db if cache_db is not None else CacheDatabase()
         self.notification_system = NotificationSystem()
-        self.ai_service = AIServiceClient()
+        self.agent = agent  # LangChainPersonalAgent instance
+        self.calendar_manager = calendar_manager  # CalendarManager instance
         
         # Runtime state
         self.running = False
@@ -111,7 +111,7 @@ class BackgroundScheduler:
         self.main_thread.start()
         
         # Start performance monitoring thread
-        perf_thread = threading.Thread(target=self._performance_monitor, daemon=True)
+        perf_thread = threading.Thread(daemon=True)
         perf_thread.start()
         
         self.logger.info("Background scheduler started successfully")
@@ -257,12 +257,27 @@ class BackgroundScheduler:
     
     def _check_calendar_triggers(self, rule: TriggerRule):
         """Check calendar-based triggers"""
+        # Always fetch fresh data from Google Calendar
+        if not self.calendar_manager or not self.calendar_manager.is_available():
+            return
+        
         conditions = rule.conditions
         minutes_range = conditions.get('minutes_before', [30, 120])
         
-        upcoming_events = self.cache_db.get_upcoming_events(tuple(minutes_range))
+        # Fetch events directly from Google Calendar
+        upcoming_events = self.calendar_manager.get_upcoming_events(limit=20)
         
+        # Filter events by time range
+        now = datetime.now()
+        filtered_events = []
         for event in upcoming_events:
+            if event.get('time_until'):
+                minutes_until = event['time_until'].total_seconds() / 60
+                if minutes_range[0] <= minutes_until <= minutes_range[1]:
+                    event['minutes_until'] = int(minutes_until)
+                    filtered_events.append(event)
+        
+        for event in filtered_events:
             # Check if we should notify about this event
             if self._should_notify_about_event(event, rule):
                 self._generate_notification(rule, 'calendar', {
@@ -334,6 +349,73 @@ class BackgroundScheduler:
         
         return True  # Simplified for now
     
+    def _generate_notification_with_agent(self, trigger_type: str, context: Dict, user_preference: str) -> Optional[str]:
+        """Generate notification content using the LangChain agent"""
+        
+        if not self.agent:
+            # Fallback to template-based generation
+            return self._generate_template_notification(trigger_type, context)
+        
+        try:
+            # Create a prompt for the agent to generate notification content
+            if trigger_type == 'calendar':
+                event = context.get('event', {})
+                minutes = context.get('minutes_until', 0)
+                prompt = f"Generate a brief, helpful notification message (max 2 sentences) to remind the user about their upcoming event: '{event.get('summary', 'Event')}' in {minutes} minutes."
+            
+            elif trigger_type == 'goal':
+                goal = context.get('goal', {})
+                days = context.get('days_stale', 0)
+                prompt = f"Generate a brief, motivating notification message (max 2 sentences) to remind the user about their goal: '{goal.get('title', 'Goal')}' which hasn't been updated in {days} days."
+            
+            elif trigger_type == 'pattern':
+                interests = context.get('interests', [])
+                prompt = f"Generate a brief, helpful notification message (max 2 sentences) based on the user's interests: {', '.join(interests[:3])}. Suggest something relevant they might want to do."
+            
+            elif trigger_type == 'learning':
+                insight_count = context.get('insight_count', 0)
+                prompt = f"Generate a brief notification message (max 2 sentences) letting the user know you've learned {insight_count} new things about their preferences and asking if they'd like to see them."
+            
+            else:
+                return self._generate_template_notification(trigger_type, context)
+            
+            # Use the agent to generate content (without saving to memory)
+            result = self.agent.process_message(prompt, save_to_memory=False)
+            
+            if result['success']:
+                return result['response']
+            else:
+                return self._generate_template_notification(trigger_type, context)
+                
+        except Exception as e:
+            self.logger.error(f"Error generating notification with agent: {e}")
+            return self._generate_template_notification(trigger_type, context)
+    
+    def _generate_template_notification(self, trigger_type: str, context: Dict) -> str:
+        """Fallback template-based notification generation"""
+        
+        if trigger_type == 'calendar':
+            event = context.get('event', {})
+            minutes = context.get('minutes_until', 0)
+            return f"Reminder: '{event.get('summary', 'Event')}' starts in {minutes} minutes."
+        
+        elif trigger_type == 'goal':
+            goal = context.get('goal', {})
+            days = context.get('days_stale', 0)
+            return f"Your goal '{goal.get('title', 'Goal')}' hasn't been updated in {days} days. How's it going?"
+        
+        elif trigger_type == 'pattern':
+            interests = context.get('interests', [])
+            if interests:
+                return f"Based on your interest in {interests[0]}, you might want to work on something related today."
+            return "You're typically active at this time. Anything you'd like to work on?"
+        
+        elif trigger_type == 'learning':
+            insight_count = context.get('insight_count', 0)
+            return f"I've learned {insight_count} new things about your preferences. Want to see what I discovered?"
+        
+        return "Proactive notification from your AI assistant."
+    
     def _generate_notification(self, rule: TriggerRule, trigger_type: str, context: Dict):
         """Generate and send a notification"""
         if self.notification_count >= self.config.notification_rate_limit:
@@ -341,10 +423,8 @@ class BackgroundScheduler:
             return
         
         try:
-            # Request AI-generated content
-            notification_content = self.ai_service.generate_notification_content(
-                trigger_type, context, rule.user_preference
-            )
+            # Generate notification content using LangChain agent
+            notification_content = self._generate_notification_with_agent(trigger_type, context, rule.user_preference)
             
             if notification_content:
                 # Send notification
@@ -378,36 +458,6 @@ class BackgroundScheduler:
         
         except Exception as e:
             self.logger.error(f"Error generating notification: {e}")
-    
-    def _performance_monitor(self):
-        """Monitor performance and resource usage"""
-        while self.running and not self.shutdown_event.is_set():
-            try:
-                # Update memory usage
-                memory_info = self.process.memory_info()
-                memory_mb = memory_info.rss / 1024 / 1024
-                self.performance_stats['memory_usage_mb'] = memory_mb
-                
-                # Update CPU usage
-                cpu_percent = self.process.cpu_percent()
-                self.performance_stats['cpu_percent'] = cpu_percent
-                
-                # Check resource limits
-                if memory_mb > self.config.max_memory_mb:
-                    self.logger.warning(f"Memory usage ({memory_mb:.1f}MB) exceeds limit ({self.config.max_memory_mb}MB)")
-                
-                if cpu_percent > self.config.max_cpu_percent:
-                    self.logger.warning(f"CPU usage ({cpu_percent:.1f}%) exceeds limit ({self.config.max_cpu_percent}%)")
-                
-                # Log stats periodically
-                if self.performance_stats['checks_performed'] % 10 == 0:
-                    self.logger.debug(f"Performance stats: {self.performance_stats}")
-                
-            except Exception as e:
-                self.logger.error(f"Error in performance monitor: {e}")
-            
-            # Check every 5 minutes
-            self.shutdown_event.wait(timeout=300)
     
     def _update_performance_stats(self, check_time: float):
         """Update performance statistics"""
@@ -480,8 +530,11 @@ def main():
                 if hasattr(config, key):
                     setattr(config, key, value)
     
+    # Initialize calendar manager for direct Google Calendar access
+    calendar_manager = CalendarManager()
+    
     # Create and start scheduler
-    scheduler = BackgroundScheduler(config)
+    scheduler = BackgroundScheduler(config, calendar_manager=calendar_manager)
     
     try:
         scheduler.start()

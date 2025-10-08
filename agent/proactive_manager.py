@@ -16,10 +16,8 @@ from pathlib import Path
 from .cache_database import CacheDatabase, TriggerRule, NotificationRecord
 from .background_scheduler import BackgroundScheduler, SchedulerConfig
 from .notification_system import NotificationSystem, NotificationConfig
-from .ai_service_client import AIServiceClient
 from .memory import UserMemory
 from .clients.calendar_integration import CalendarManager
-from .privacy import PrivacyManager
 
 @dataclass
 class ProactiveConfig:
@@ -44,17 +42,16 @@ class ProactiveManager:
     def __init__(self, 
                  memory: UserMemory,
                  calendar_manager: CalendarManager,
-                 privacy_manager: PrivacyManager,
-                 config: Optional[ProactiveConfig] = None):
+                 config: Optional[ProactiveConfig] = None,
+                 agent=None):
         
         self.memory = memory
         self.calendar_manager = calendar_manager
-        self.privacy_manager = privacy_manager
         self.config = config or ProactiveConfig()
+        self.agent = agent  # LangChainPersonalAgent instance
         
         # Initialize hybrid architecture components
         self.cache_db = CacheDatabase()
-        self.ai_service = AIServiceClient()
         self.notification_system = NotificationSystem()
         self.background_scheduler = None
         
@@ -129,92 +126,40 @@ class ProactiveManager:
         self.notification_callback = notification_callback
     
     def _initialize_trigger_rules(self):
-        """Initialize trigger rules based on user preferences and privacy settings"""
-        privacy_level = self.privacy_manager.get_privacy_level()
-        
-        # Adjust trigger rules based on privacy level
-        if privacy_level == 'minimal':
-            # Very limited proactive features
-            rules = [
-                TriggerRule(
-                    id="calendar_urgent_only",
-                    rule_type="calendar",
-                    conditions={"minutes_before": [15, 30]},
-                    threshold=0.9,
-                    enabled=True,
-                    user_preference="high"
-                )
-            ]
-        elif privacy_level == 'balanced':
-            # Standard proactive features
-            rules = [
-                TriggerRule(
-                    id="calendar_meetings",
-                    rule_type="calendar",
-                    conditions={"minutes_before": [30, 120]},
-                    threshold=0.7,
-                    enabled=True,
-                    user_preference="medium"
-                ),
-                TriggerRule(
-                    id="goal_reminders",
-                    rule_type="goal",
-                    conditions={"days_since_update": 3},
-                    threshold=0.6,
-                    enabled=True,
-                    user_preference="medium"
-                ),
-                TriggerRule(
-                    id="pattern_suggestions",
-                    rule_type="pattern",
-                    conditions={"active_hour_threshold": 5},
-                    threshold=0.5,
-                    enabled=True,
-                    user_preference="low"
-                )
-            ]
-        else:  # 'full'
-            # All proactive features enabled
-            rules = [
-                TriggerRule(
-                    id="calendar_all_events",
-                    rule_type="calendar",
-                    conditions={"minutes_before": [30, 180]},
-                    threshold=0.6,
-                    enabled=True,
-                    user_preference="medium"
-                ),
-                TriggerRule(
-                    id="goal_tracking",
-                    rule_type="goal",
-                    conditions={"days_since_update": 2},
-                    threshold=0.5,
-                    enabled=True,
-                    user_preference="medium"
-                ),
-                TriggerRule(
-                    id="pattern_optimization",
-                    rule_type="pattern",
-                    conditions={"active_hour_threshold": 3},
-                    threshold=0.4,
-                    enabled=True,
-                    user_preference="low"
-                ),
-                TriggerRule(
-                    id="learning_insights",
-                    rule_type="learning",
-                    conditions={"insight_count": 3},
-                    threshold=0.7,
-                    enabled=True,
-                    user_preference="medium"
-                )
-            ]
+        """Initialize trigger rules based on user preferences"""
+        # Define default trigger rules
+        rules = [
+            TriggerRule(
+                id="calendar_meetings",
+                rule_type="calendar",
+                conditions={"minutes_before": [30, 120]},
+                threshold=0.7,
+                enabled=True,
+                user_preference="medium"
+            ),
+            TriggerRule(
+                id="goal_reminders",
+                rule_type="goal",
+                conditions={"days_since_update": 3},
+                threshold=0.6,
+                enabled=True,
+                user_preference="medium"
+            ),
+            TriggerRule(
+                id="pattern_suggestions",
+                rule_type="pattern",
+                conditions={"active_hour_threshold": 5},
+                threshold=0.5,
+                enabled=True,
+                user_preference="low"
+            )
+        ]
         
         # Store trigger rules
         for rule in rules:
             self.cache_db.upsert_trigger_rule(rule)
         
-        self.logger.info(f"Initialized {len(rules)} trigger rules for privacy level: {privacy_level}")
+        self.logger.info(f"Initialized {len(rules)} trigger rules")
     
     def start_proactive_system(self):
         """Start the proactive system"""
@@ -237,14 +182,16 @@ class ProactiveManager:
                 max_cpu_percent=10.0
             )
             
-            self.background_scheduler = BackgroundScheduler(scheduler_config)
+            self.background_scheduler = BackgroundScheduler(
+                scheduler_config, 
+                agent=self.agent, 
+                calendar_manager=self.calendar_manager,
+                cache_db=self.cache_db  # Share the same database instance
+            )
             self.background_scheduler.start()
             
             # Start periodic sync
             self._start_sync_thread()
-            
-            # Precompute common responses
-            self.ai_service.precompute_common_responses()
             
             self.running = True
             self.logger.info("Proactive system started successfully")
@@ -269,7 +216,6 @@ class ProactiveManager:
                 self.background_scheduler = None
             
             # Cleanup components
-            self.ai_service.cleanup()
             self.notification_system.cleanup()
             self.cache_db.close()
             
@@ -305,10 +251,6 @@ class ProactiveManager:
                 # Sync goals
                 if self.config.goal_tracking:
                     self._sync_goals()
-                
-                # Sync calendar data
-                if self.config.calendar_integration and self.calendar_manager.is_available():
-                    self._sync_calendar_data()
                 
                 # Update metrics
                 self.metrics['sync_operations'] += 1
@@ -386,19 +328,6 @@ class ProactiveManager:
             
         except Exception as e:
             self.logger.error(f"Error syncing goals: {e}")
-    
-    def _sync_calendar_data(self):
-        """Sync calendar data to cache"""
-        try:
-            # Get upcoming events
-            upcoming_events = self.calendar_manager.get_upcoming_events(limit=20)
-            
-            if upcoming_events:
-                self.cache_db.sync_calendar_cache(upcoming_events)
-                self.last_sync['calendar'] = datetime.now().isoformat()
-            
-        except Exception as e:
-            self.logger.error(f"Error syncing calendar data: {e}")
     
     def _learn_from_notification_response(self, notification_id: str, action: str):
         """Learn from user responses to improve future notifications"""
@@ -539,7 +468,6 @@ class ProactiveManager:
             'metrics': self.metrics.copy(),
             'cache_stats': self.cache_db.get_cache_stats(),
             'notification_stats': self.cache_db.get_notification_stats(),
-            'ai_service_stats': self.ai_service.get_service_stats(),
             'active_notifications': len(self.notification_system.get_active_notifications()),
             'trigger_rules_count': len(self.cache_db.get_active_trigger_rules())
         }
@@ -595,16 +523,15 @@ def integrate_with_main_agent():
             enabled=True,
             check_interval=900,  # 15 minutes
             max_notifications_per_hour=6,
-            learning_enabled=privacy_manager.can_learn_preferences(),
+            learning_enabled=True,
             calendar_integration=calendar_manager.is_available(),
             goal_tracking=True,
-            pattern_analysis=privacy_manager.can_learn_preferences()
+            pattern_analysis=True
         )
         
         self.proactive_manager = ProactiveManager(
             memory=memory,
             calendar_manager=calendar_manager,
-            privacy_manager=privacy_manager,
             config=proactive_config
         )
         

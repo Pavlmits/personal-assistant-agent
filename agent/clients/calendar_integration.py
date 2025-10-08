@@ -16,7 +16,7 @@ class CalendarManager:
     Manages Google Calendar integration for proactive agent
     """
     
-    SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+    SCOPES = ['https://www.googleapis.com/auth/calendar']
     
     def __init__(self, credentials_file: str = 'credentials.json', token_file: str = 'token.pickle'):
         self.credentials_file = credentials_file
@@ -87,8 +87,8 @@ class CalendarManager:
         
         return False
     
-    def get_upcoming_events(self, limit: int = 10, days_ahead: int = 7) -> List[Dict]:
-        """Get upcoming calendar events"""
+    def get_upcoming_events(self, limit: int = 10, days_ahead: int = 7, all_calendars: bool = True) -> List[Dict]:
+        """Get upcoming calendar events from all calendars or just primary"""
         if not self.service:
             return []
         
@@ -97,17 +97,54 @@ class CalendarManager:
             now = datetime.utcnow().isoformat() + 'Z'
             time_max = (datetime.utcnow() + timedelta(days=days_ahead)).isoformat() + 'Z'
             
-            # Call the Calendar API
-            events_result = self.service.events().list(
-                calendarId='primary',
-                timeMin=now,
-                timeMax=time_max,
-                maxResults=limit,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
+            all_events = []
             
-            events = events_result.get('items', [])
+            if all_calendars:
+                # Get list of all calendars
+                try:
+                    calendar_list = self.service.calendarList().list().execute()
+                    calendars = calendar_list.get('items', [])
+                except Exception as e:
+                    print(f"Error fetching calendar list: {e}")
+                    calendars = [{'id': 'primary'}]  # Fallback to primary
+                
+                # Fetch events from each calendar
+                for calendar in calendars:
+                    cal_id = calendar['id']
+                    try:
+                        events_result = self.service.events().list(
+                            calendarId=cal_id,
+                            timeMin=now,
+                            timeMax=time_max,
+                            maxResults=limit,
+                            singleEvents=True,
+                            orderBy='startTime'
+                        ).execute()
+                        
+                        events = events_result.get('items', [])
+                        # Add calendar name to each event
+                        for event in events:
+                            event['calendar_name'] = calendar.get('summary', cal_id)
+                        all_events.extend(events)
+                    except Exception as e:
+                        print(f"Error fetching events from calendar {cal_id}: {e}")
+                        continue
+                
+                # Sort all events by start time
+                all_events.sort(key=lambda x: x['start'].get('dateTime', x['start'].get('date')))
+                events = all_events[:limit]  # Limit total results
+            else:
+                # Just query primary calendar
+                events_result = self.service.events().list(
+                    calendarId='primary',
+                    timeMin=now,
+                    timeMax=time_max,
+                    maxResults=limit,
+                    singleEvents=True,
+                    orderBy='startTime'
+                ).execute()
+                
+                events = events_result.get('items', [])
             
             # Process events
             processed_events = []
@@ -121,6 +158,7 @@ class CalendarManager:
                     'description': event.get('description', ''),
                     'location': event.get('location', ''),
                     'attendees': len(event.get('attendees', [])),
+                    'calendar_name': event.get('calendar_name', 'Primary'),
                 }
                 
                 # Add time until event
@@ -148,8 +186,8 @@ class CalendarManager:
             print(f"Error fetching calendar events: {e}")
             return []
     
-    def get_events_for_date(self, target_date: datetime) -> List[Dict]:
-        """Get events for a specific date"""
+    def get_events_for_date(self, target_date: datetime, all_calendars: bool = True) -> List[Dict]:
+        """Get events for a specific date from all calendars or just primary"""
         if not self.service:
             return []
         
@@ -161,15 +199,52 @@ class CalendarManager:
             time_min = start_time.isoformat() + 'Z'
             time_max = end_time.isoformat() + 'Z'
             
-            events_result = self.service.events().list(
-                calendarId='primary',
-                timeMin=time_min,
-                timeMax=time_max,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
+            all_events = []
             
-            return self._process_events(events_result.get('items', []))
+            if all_calendars:
+                # Get list of all calendars
+                try:
+                    calendar_list = self.service.calendarList().list().execute()
+                    calendars = calendar_list.get('items', [])
+                except Exception as e:
+                    print(f"Error fetching calendar list: {e}")
+                    calendars = [{'id': 'primary'}]
+                
+                # Fetch events from each calendar
+                for calendar in calendars:
+                    cal_id = calendar['id']
+                    try:
+                        events_result = self.service.events().list(
+                            calendarId=cal_id,
+                            timeMin=time_min,
+                            timeMax=time_max,
+                            singleEvents=True,
+                            orderBy='startTime'
+                        ).execute()
+                        
+                        events = events_result.get('items', [])
+                        # Add calendar name to each event
+                        for event in events:
+                            event['calendar_name'] = calendar.get('summary', cal_id)
+                        all_events.extend(events)
+                    except Exception as e:
+                        print(f"Error fetching events from calendar {cal_id}: {e}")
+                        continue
+                
+                # Sort by start time
+                all_events.sort(key=lambda x: x['start'].get('dateTime', x['start'].get('date')))
+            else:
+                # Just query primary calendar
+                events_result = self.service.events().list(
+                    calendarId='primary',
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy='startTime'
+                ).execute()
+                all_events = events_result.get('items', [])
+            
+            return self._process_events(all_events)
             
         except Exception as e:
             print(f"Error fetching events for date: {e}")
@@ -308,7 +383,8 @@ class CalendarManager:
                 'description': event.get('description', ''),
                 'location': event.get('location', ''),
                 'attendees': len(event.get('attendees', [])),
-                'is_all_day': 'T' not in start
+                'is_all_day': 'T' not in start,
+                'calendar_name': event.get('calendar_name', 'Primary')
             }
             
             processed.append(processed_event)
@@ -366,3 +442,64 @@ class CalendarManager:
     def is_available(self) -> bool:
         """Check if calendar integration is available"""
         return self.service is not None
+    
+    def create_event(self, summary: str, start_time: datetime, end_time: datetime, 
+                    description: str = "", location: str = "", 
+                    attendees: Optional[List[str]] = None) -> Optional[Dict]:
+        """
+        Create a new calendar event
+        
+        Args:
+            summary: Event title
+            start_time: Event start datetime
+            end_time: Event end datetime
+            description: Event description (optional)
+            location: Event location (optional)
+            attendees: List of attendee email addresses (optional)
+        
+        Returns:
+            Created event details or None if failed
+        """
+        if not self.service:
+            print("Calendar service not available")
+            return None
+        
+        try:
+            # Build event body
+            event_body = {
+                'summary': summary,
+                'description': description,
+                'location': location,
+                'start': {
+                    'dateTime': start_time.isoformat(),
+                    'timeZone': 'UTC',
+                },
+                'end': {
+                    'dateTime': end_time.isoformat(),
+                    'timeZone': 'UTC',
+                },
+            }
+            
+            # Add attendees if provided
+            if attendees:
+                event_body['attendees'] = [{'email': email} for email in attendees]
+            
+            # Create the event
+            event = self.service.events().insert(
+                calendarId='primary',
+                body=event_body,
+                sendUpdates='all' if attendees else 'none'
+            ).execute()
+            
+            return {
+                'id': event.get('id'),
+                'summary': event.get('summary'),
+                'start': event['start'].get('dateTime', event['start'].get('date')),
+                'end': event['end'].get('dateTime', event['end'].get('date')),
+                'htmlLink': event.get('htmlLink'),
+                'status': event.get('status')
+            }
+            
+        except Exception as e:
+            print(f"Error creating calendar event: {e}")
+            return None

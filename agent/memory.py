@@ -217,7 +217,7 @@ class UserMemory:
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT title, description, progress, target_date, created_at, last_updated
+            SELECT id, title, description, progress, target_date, created_at, last_updated
             FROM goals
             WHERE status = 'active'
             ORDER BY created_at DESC
@@ -226,19 +226,20 @@ class UserMemory:
         goals = []
         for row in cursor.fetchall():
             goals.append({
-                'title': row[0],
-                'description': row[1],
-                'progress': row[2],
-                'target_date': row[3],
-                'created_at': row[4],
-                'last_updated': row[5]
+                'id': row[0],
+                'title': row[1],
+                'description': row[2],
+                'progress': row[3],
+                'target_date': row[4],
+                'created_at': row[5],
+                'last_updated': row[6]
             })
         
         conn.close()
         return goals
     
-    def update_goal_progress(self, title: str, progress: int):
-        """Update progress on a goal"""
+    def update_goal_progress(self, goal_id: int, progress: int):
+        """Update progress on a goal by ID"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -247,8 +248,8 @@ class UserMemory:
         cursor.execute('''
             UPDATE goals 
             SET progress = ?, last_updated = ?
-            WHERE title = ? AND status = 'active'
-        ''', (progress, timestamp, title))
+            WHERE id = ? AND status = 'active'
+        ''', (progress, timestamp, goal_id))
         
         conn.commit()
         conn.close()
@@ -267,6 +268,10 @@ class UserMemory:
         
         conn.commit()
         conn.close()
+    
+    def add_simple_insight(self, content: str):
+        """Add a simple insight with default parameters"""
+        self.add_insight("interaction", content, 0.8)
     
     def get_recent_insights(self, limit: int = 10) -> List[str]:
         """Get recent learning insights"""
