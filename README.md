@@ -4,7 +4,7 @@ A research implementation for the thesis: "Personal and Proactive Artificial Int
 
 ## Overview
 
-This CLI-based AI agent demonstrates:
+This AI agent provides both **CLI and Web interfaces** and demonstrates:
 - **Adaptation**: Learning user preferences and communication patterns
 - **Prediction**: Anticipating user needs based on historical data and context  
 - **Proactive Interaction**: Initiating conversations, reminders, and suggestions autonomously
@@ -34,8 +34,39 @@ pyenv virtualenv 3.11.9 agent-assistant
 pyenv local agent-assistant
 pip install -r requirements.txt --index-url https://pypi.org/simple/
 
+# CLI Interface
 python main.py chat
+
+# Web Interface (NEW!)
+python run_streamlit.py
+# or
+streamlit run streamlit_app.py
 ```
+
+## Interfaces
+
+### 🌐 Web Interface (Streamlit)
+Modern, interactive web interface with:
+- **Real-time chat** with your AI agent
+- **Visual dashboard** showing agent status, user profile, and goals
+- **Tool usage indicators** showing which tools the agent used
+- **Model switching** capability
+- **Quick actions** for common tasks
+- **Responsive design** that works on desktop and mobile
+
+```bash
+# Start the web interface
+python run_streamlit.py
+
+# Or directly with streamlit
+streamlit run streamlit_app.py
+```
+
+The web interface will open at `http://localhost:8501`
+
+### 💻 CLI Interface
+Full-featured command-line interface:
+
 ## Usage
 
 ```bash
@@ -71,9 +102,6 @@ python main.py cleanup -c -g          # Clear conversations and goals
 python main.py service install    # Install as system service
 python main.py proactive test     # Test notifications
 python main.py background-service # Run background service
-
-# Install once
-python main.py service install
 
 # Then control it with launchctl
 python main.py service start    # Start

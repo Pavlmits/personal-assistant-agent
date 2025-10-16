@@ -52,12 +52,13 @@ def initialize_langchain_agent():
         console.print("[yellow]⚠ No AI models available - agent may not work properly[/yellow]")
     
     try:
-        # Create LangChain agent
+        # Create LangChain agent (in student mode by default)
         agent = LangChainPersonalAgent(
             memory=memory,
             calendar_manager=calendar_mgr,
             model_manager=model_mgr,
-            notification_system=notification_system
+            notification_system=notification_system,
+            student_mode=True
         )
         
         # Initialize proactive manager for background notifications
