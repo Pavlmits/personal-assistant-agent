@@ -236,6 +236,8 @@ def show_student_setup():
         if st.button("🚀 Complete Setup", type="primary", use_container_width=True):
             if validate_setup():
                 save_setup_data()
+                # Clear cached resources so agent re-initializes with new data
+                st.cache_resource.clear()
                 st.success("🎉 Setup complete! Your student assistant is ready to help!")
                 st.session_state.setup_complete = True
                 st.rerun()
@@ -633,8 +635,12 @@ def save_setup_data():
     """Save setup data"""
     try:
         from agent.memory import UserMemory
+        import hashlib
+
         memory = UserMemory()
         setup_data = st.session_state.setup_data
+
+        # 1. Update profile
         profile = memory.get_user_profile()
         profile.update({
             "student_name": setup_data["student_name"],
@@ -645,9 +651,66 @@ def save_setup_data():
             "student_mode": True
         })
         memory.update_user_profile(profile)
-        st.success("Setup data saved successfully!")
+
+        # 2. Extract and save courses from schedule
+        courses_dict = {}  # Use dict to track unique courses
+        colors = ["#4CAF50", "#2196F3", "#FF9800", "#9C27B0", "#F44336", "#00BCD4", "#FFC107", "#E91E63"]
+
+        for day, classes in setup_data.get("schedule", {}).items():
+            for class_info in classes:
+                subject = class_info.get("subject", "").strip()
+                if subject and subject not in courses_dict:
+                    # Generate unique course ID (e.g., "math_a1b2c3")
+                    course_id = f"{subject.lower().replace(' ', '_')}_{hashlib.md5(subject.encode()).hexdigest()[:6]}"
+
+                    courses_dict[subject] = {
+                        'course_id': course_id,
+                        'course_name': subject,
+                        'room': class_info.get("room", ""),
+                        'start_time': class_info.get("start_time", ""),
+                        'end_time': class_info.get("end_time", ""),
+                        'days': [],
+                        'teacher_name': "",
+                        'color': colors[len(courses_dict) % len(colors)]
+                    }
+
+                # Add this day to the course's days list
+                if subject and day not in courses_dict[subject]['days']:
+                    courses_dict[subject]['days'].append(day)
+
+        # 3. Save each unique course to database
+        courses_saved = 0
+        for course_data in courses_dict.values():
+            memory.add_course(
+                course_id=course_data['course_id'],
+                course_name=course_data['course_name'],
+                teacher_name=course_data.get('teacher_name', ''),
+                room=course_data.get('room', ''),
+                days=course_data['days'],
+                start_time=course_data.get('start_time', ''),
+                end_time=course_data.get('end_time', ''),
+                color=course_data['color']
+            )
+            courses_saved += 1
+
+        # 4. Save goals
+        goals_saved = 0
+        for goal in setup_data.get("goals", []):
+            # Build description from category and importance
+            description = f"{goal.get('category', '')} - {goal.get('importance', 'Medium')} priority"
+            memory.add_goal(
+                title=goal.get("title", ""),
+                description=description,
+                target_date=goal.get("target_date", "")
+            )
+            goals_saved += 1
+
+        st.success(f"✅ Setup saved! {courses_saved} courses and {goals_saved} goals added.")
+
     except Exception as e:
         st.error(f"Error saving setup data: {e}")
+        import traceback
+        st.error(traceback.format_exc())
 
 if __name__ == "__main__":
     st.set_page_config(

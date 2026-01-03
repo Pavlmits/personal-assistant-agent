@@ -30,8 +30,12 @@ ENV/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
+*.db-journal
 user_memory.db
 evaluation_metrics.db
+agent_cache.db
 
 # Privacy and credentials
 privacy_config.json

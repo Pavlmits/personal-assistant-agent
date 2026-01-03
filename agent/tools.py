@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import json
 
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .memory import UserMemory
 from .clients.calendar_integration import CalendarManager
@@ -277,6 +277,21 @@ class MemorySearchInput(BaseModel):
     query: str = Field(description="What to search for in conversation history")
     limit: int = Field(default=5, description="Maximum number of results to return")
 
+    @model_validator(mode='before')
+    @classmethod
+    def parse_malformed_json(cls, data):
+        """Handle case where LangChain stuffs all JSON into one field"""
+        if isinstance(data, dict):
+            # Check if entire JSON is stuffed into query field
+            if 'query' in data and isinstance(data['query'], str) and data['query'].strip().startswith('{'):
+                try:
+                    parsed = json.loads(data['query'])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+        return data
+
 
 class MemorySearchTool(BaseTool):
     """Tool to search conversation history and user insights"""
@@ -377,25 +392,46 @@ class UserProfileTool(BaseTool):
 
 class GoalsInput(BaseModel):
     """Input for goals management"""
-    action: str = Field(description="Action to perform: 'list', 'add', 'update', or 'complete'")
+    action: str = Field(default="list", description="Action to perform: 'list' (default), 'add', 'update', or 'complete'")
     title: Optional[str] = Field(default=None, description="Goal title (for add/update)")
     description: Optional[str] = Field(default=None, description="Goal description")
     progress: Optional[int] = Field(default=None, description="Progress percentage (0-100)")
+
+    @model_validator(mode='before')
+    @classmethod
+    def parse_malformed_json(cls, data):
+        """Handle case where LangChain stuffs all JSON into one field"""
+        if isinstance(data, dict):
+            # Check if entire JSON is stuffed into action field
+            if 'action' in data and isinstance(data['action'], str) and data['action'].strip().startswith('{'):
+                try:
+                    parsed = json.loads(data['action'])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+        return data
 
 
 class GoalsManagementTool(BaseTool):
     """Tool to manage user goals"""
     name: str = "manage_goals"
-    description: str = """Manage user goals and tasks - list current goals, add new ones, update progress, or mark as complete. 
-    Use this tool when the user mentions NEW tasks or to-dos they need to accomplish (e.g., 'I need to...', 'I should...', 'I might need to...'). 
-    Offer to add these as goals to help them track progress."""
+    description: str = """Manage user goals and tasks - VIEW/LIST current goals, add new ones, update progress, or mark as complete.
+
+    Use this tool to:
+    - LIST existing goals (when user asks "show my goals", "what are my goals", "my progress", etc.)
+    - ADD new goals (when user mentions tasks like "I need to...", "I should...")
+    - UPDATE goal progress (when user reports progress)
+    - MARK goals as complete (when user finishes a goal)
+
+    Actions: 'list' (default), 'add', 'update', 'complete'"""
     args_schema: type = GoalsInput
     
     def __init__(self, memory: UserMemory):
         super().__init__()
         object.__setattr__(self, 'memory', memory)
     
-    def _run(self, action: str = None, title: Optional[str] = None, description: Optional[str] = None, 
+    def _run(self, action: str = "list", title: Optional[str] = None, description: Optional[str] = None,
              progress: Optional[int] = None) -> str:
         """Manage user goals"""
         try:
@@ -403,15 +439,15 @@ class GoalsManagementTool(BaseTool):
             if isinstance(action, str) and action.startswith('{'):
                 try:
                     params = json.loads(action)
-                    action = params.get('action')
+                    action = params.get('action', 'list')
                     title = params.get('title', params.get('goal'))  # Support both 'title' and 'goal'
                     description = params.get('description')
                     progress = params.get('progress')
                 except json.JSONDecodeError:
                     pass  # Continue with original action value
-            
+
             if not action:
-                return "Error: 'action' parameter is required. Available actions: list, add, update"
+                action = "list"  # Default to list if no action provided
             
             if action == "list":
                 goals = self.memory.get_goals()
@@ -467,6 +503,31 @@ class NotificationInput(BaseModel):
     title: str = Field(description="Notification title")
     message: str = Field(description="Notification message")
     priority: str = Field(default="normal", description="Priority: low, normal, high")
+
+    @model_validator(mode='before')
+    @classmethod
+    def parse_malformed_json(cls, data):
+        """Handle case where LangChain stuffs all JSON into one field"""
+        if isinstance(data, dict):
+            # Check if entire JSON is stuffed into title field
+            if 'title' in data and isinstance(data['title'], str) and data['title'].strip().startswith('{'):
+                try:
+                    parsed = json.loads(data['title'])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+
+            # Check if entire JSON is stuffed into message field
+            if 'message' in data and isinstance(data['message'], str) and data['message'].strip().startswith('{'):
+                try:
+                    parsed = json.loads(data['message'])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+
+        return data
 
 
 class NotificationTool(BaseTool):

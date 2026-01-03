@@ -412,11 +412,29 @@ def main():
         with col4:
             if st.button("⚡ Quick Help"):
                 st.session_state.quick_message = "I need help with something urgent"
-        
-        # Clear chat button
-        if st.button("🗑️ Clear Chat", type="secondary"):
-            st.session_state.messages = []
-            st.rerun()
+
+        # Profile management
+        st.markdown("---")
+        st.markdown("### Settings")
+
+        col_settings1, col_settings2 = st.columns(2)
+        with col_settings1:
+            if st.button("👤 Edit Profile", use_container_width=True):
+                # Delete setup_complete from database to trigger setup wizard
+                import sqlite3
+                conn = sqlite3.connect("user_memory.db")
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM user_profile WHERE key = 'setup_complete'")
+                conn.commit()
+                conn.close()
+                # Clear cached agent so it re-initializes after setup
+                st.cache_resource.clear()
+                st.rerun()
+
+        with col_settings2:
+            if st.button("🗑️ Clear Chat", type="secondary", use_container_width=True):
+                st.session_state.messages = []
+                st.rerun()
         
         # Model selection
         st.markdown("### Model Settings")
